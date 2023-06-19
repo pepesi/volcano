@@ -17,6 +17,8 @@ limitations under the License.
 package overcommit
 
 import (
+	"strings"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 
@@ -35,23 +37,29 @@ const (
 	overCommitFactor = "overcommit-factor"
 	// defaultOverCommitFactor defines the default overCommit resource factor for enqueue action
 	defaultOverCommitFactor = 1.2
+	// overCommitFactorPrefix is the key prefix for specify resource key name
+	overCommitFactorPrefix = "overcommit-factor."
+	// overCommitFactorResources is the key for specify resource key name
+	overCommitFactorResources = "overcommit-factor-resources"
 )
 
 type overcommitPlugin struct {
 	// Arguments given for the plugin
-	pluginArguments  framework.Arguments
-	idleResource     *api.Resource
-	inqueueResource  *api.Resource
-	overCommitFactor float64
+	pluginArguments          framework.Arguments
+	idleResource             *api.Resource
+	inqueueResource          *api.Resource
+	overCommitFactor         float64
+	overCommitResourceConfig map[string]float64
 }
 
 // New function returns overcommit plugin object
 func New(arguments framework.Arguments) framework.Plugin {
 	return &overcommitPlugin{
-		pluginArguments:  arguments,
-		idleResource:     api.EmptyResource(),
-		inqueueResource:  api.EmptyResource(),
-		overCommitFactor: defaultOverCommitFactor,
+		overCommitResourceConfig: getResourceRatio(arguments),
+		pluginArguments:          arguments,
+		idleResource:             api.EmptyResource(),
+		inqueueResource:          api.EmptyResource(),
+		overCommitFactor:         defaultOverCommitFactor,
 	}
 }
 
@@ -68,6 +76,10 @@ tiers:
   - name: overcommit
     arguments:
     overcommit-factor: 1.0
+    overcommit-factor-resources: cpu,memory,nvidia.com/gpu
+    overcommit-factor.cpu: 1.2
+    overcommit-factor.memory: 1.5
+    overcommit-factor.nvidia.com/gpu: 1.0
 */
 func (op *overcommitPlugin) OnSessionOpen(ssn *framework.Session) {
 	klog.V(5).Infof("Enter overcommit plugin ...")
@@ -87,7 +99,7 @@ func (op *overcommitPlugin) OnSessionOpen(ssn *framework.Session) {
 		total.Add(node.Allocatable)
 		used.Add(node.Used)
 	}
-	op.idleResource = total.Clone().Multi(op.overCommitFactor).Sub(used)
+	op.idleResource = total.Clone().MultiWithSpecifyRatio(op.overCommitFactor, op.overCommitResourceConfig).Sub(used)
 
 	for _, job := range ssn.Jobs {
 		// calculate inqueue job resources
@@ -142,4 +154,29 @@ func (op *overcommitPlugin) OnSessionOpen(ssn *framework.Session) {
 func (op *overcommitPlugin) OnSessionClose(ssn *framework.Session) {
 	op.idleResource = nil
 	op.inqueueResource = nil
+}
+
+func getResourceRatio(args framework.Arguments) map[string]float64 {
+	resourcesStr, ok := args[overCommitFactorResources].(string)
+	if !ok {
+		resourcesStr = ""
+	}
+
+	resourceRatios := make(map[string]float64)
+	resources := strings.Split(resourcesStr, ",")
+	for _, resource := range resources {
+		resource = strings.TrimSpace(resource)
+		if resource == "" {
+			continue
+		}
+
+		resourceKey := overCommitFactorPrefix + resource
+		resourceRatio := 1.2
+		args.GetFloat64(&resourceRatio, resourceKey)
+		if resourceRatio < 0 {
+			resourceRatio = float64(defaultOverCommitFactor)
+		}
+		resourceRatios[resource] = resourceRatio
+	}
+	return resourceRatios
 }

@@ -272,6 +272,21 @@ func (r *Resource) Multi(ratio float64) *Resource {
 	return r
 }
 
+// Multi multiples the resource with ratio provided
+func (r *Resource) MultiWithSpecifyRatio(defaultRatio float64, ratios map[string]float64) *Resource {
+	r.MilliCPU *= defaultRatio
+	r.Memory *= defaultRatio
+	for rName, rQuant := range r.ScalarResources {
+		ratio, ok := ratios[string(rName)]
+		if !ok {
+			r.ScalarResources[rName] = rQuant * defaultRatio
+		} else {
+			r.ScalarResources[rName] = rQuant * ratio
+		}
+	}
+	return r
+}
+
 // SetMaxResource compares with ResourceList and takes max value for each Resource.
 func (r *Resource) SetMaxResource(rr *Resource) {
 	if r == nil || rr == nil {
